@@ -16,7 +16,7 @@ public class FlowDetail {
 
     private String name;
     private String type;
-    private String trigger;
+    private FlowTrigger trigger;
 
     @Builder.Default
     private List<String> processors = new ArrayList<>();

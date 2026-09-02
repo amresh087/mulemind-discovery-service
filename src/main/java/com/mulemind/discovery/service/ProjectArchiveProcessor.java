@@ -16,7 +16,11 @@ import java.util.zip.ZipInputStream;
 import org.springframework.stereotype.Component;
 
 import com.mulemind.discovery.dto.ApiEndpoint;
+import com.mulemind.discovery.dto.ApplicationDetails;
+import com.mulemind.discovery.dto.ConnectorDetails;
 import com.mulemind.discovery.dto.FlowDetail;
+import com.mulemind.discovery.dto.FlowReference;
+import com.mulemind.discovery.dto.FlowTrigger;
 import com.mulemind.discovery.dto.TransformationDetail;
 import com.mulemind.discovery.dto.VariableDetail;
 import com.mulemind.discovery.util.ZipExtractorUtil;
@@ -107,6 +111,7 @@ public class ProjectArchiveProcessor {
                 continue;
             }
             analysis.getExtractedFiles().add(fileName);
+            analysis.getSourceFiles().add(fileName);
             analyzeContent(fileName, content, analysis);
         }
         return analysis;
@@ -323,6 +328,20 @@ public class ProjectArchiveProcessor {
      * @param analysis
      */
     private void analyzePom(String content, ProjectArtifactAnalysis analysis) {
+        analysis.setApplication(ApplicationDetails.builder()
+            .name(firstTagValue(content, "name"))
+            .groupId(firstTagValue(content, "groupId"))
+            .artifactId(firstTagValue(content, "artifactId"))
+            .version(firstTagValue(content, "version"))
+            .packaging(firstTagValue(content, "packaging"))
+            .muleRuntime(firstPropertyValue(content, "app.runtime"))
+            .muleMavenPluginVersion(firstPropertyValue(content, "mule.maven.plugin.version"))
+            .build());
+        extractPomConnectors(content, analysis);
+        analysis.setDependencyDetails(com.mulemind.discovery.dto.DependencyDetails.builder()
+            .http(analysis.getDependencyDetails().getHttp())
+            .sockets(analysis.getDependencyDetails().getSockets())
+            .build());
         extractMuleVersion(content, analysis);
         extractJavaVersion(content, analysis);
         extractDependencies(content, analysis);
@@ -406,7 +425,10 @@ public class ProjectArchiveProcessor {
             Matcher referenceMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?flow-ref\\b([^>]*)/?>",
                     Pattern.CASE_INSENSITIVE).matcher(flowBody);
             while (referenceMatcher.find()) {
-                addUnique(flow.getReferences(), attribute(referenceMatcher.group(1), "name"));
+                String target = attribute(referenceMatcher.group(1), "name");
+                addUnique(flow.getReferences(), target);
+                analysis.getFlowReferenceDetails().add(FlowReference.builder()
+                        .sourceFlow(flowName).targetFlow(target).build());
             }
 
             Matcher listenerMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?listener\\b([^>]*)/?>",
@@ -416,10 +438,10 @@ public class ProjectArchiveProcessor {
                 String configName = attribute(listenerAttributes, "config-ref");
                 String path = attribute(listenerAttributes, "path");
                 String connection = listenerConfigs.getOrDefault(configName, "");
-                flow.setTrigger("HTTP " + path);
+                flow.setTrigger(FlowTrigger.builder().type("HTTP").path(path).build());
                 analysis.getApiDetails().add(ApiEndpoint.builder()
                         .type("HTTP")
-                        .method(defaultValue(attribute(listenerAttributes, "method"), "ANY"))
+                        .method(nullIfBlank(attribute(listenerAttributes, "method")))
                         .path(path)
                         .listenerConfig(configName)
                         .host(attribute(connection, "host"))
@@ -460,7 +482,7 @@ public class ProjectArchiveProcessor {
                     .type("DataWeave")
                     .flow(flowName)
                     .outputMimeType(outputMatcher.find() ? outputMatcher.group(1) : "")
-                    .script(body)
+                    .logic(body.replaceAll("\\s+", " ").trim())
                     .build());
         }
     }
@@ -471,8 +493,8 @@ public class ProjectArchiveProcessor {
         return matcher.find() ? matcher.group(1).trim() : "";
     }
 
-    private static String defaultValue(String value, String fallback) {
-        return value.isBlank() ? fallback : value;
+    private static String nullIfBlank(String value) {
+        return value.isBlank() ? null : value;
     }
 
     private static Integer parsePort(String value) {
@@ -487,6 +509,32 @@ public class ProjectArchiveProcessor {
         addTagValues(content, "muleVersion", analysis.getMuleVersions());
         addTagValues(content, "mule.version", analysis.getMuleVersions());
         addDependencyVersion(content, "mule-runtime", analysis.getMuleVersions());
+    }
+
+    private void extractPomConnectors(String content, ProjectArtifactAnalysis analysis) {
+        Matcher matcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?dependency\\b[^>]*>(.*?)</(?:[A-Za-z_][\\w.-]*:)?dependency\\s*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        while (matcher.find()) {
+            String block = matcher.group(1);
+            String artifact = firstTagValue(block, "artifactId");
+            String version = firstTagValue(block, "version");
+            String type = artifact.toLowerCase(Locale.ROOT).contains("sockets") ? "SOCKETS" : "HTTP";
+            if (artifact.contains("http-connector") || artifact.contains("sockets-connector")) {
+                analysis.getConnectorDetails().add(ConnectorDetails.builder().type(type).version(version).build());
+                String dependency = artifact + ":" + version;
+                if ("HTTP".equals(type)) {
+                    analysis.getDependencyDetails().getHttp().add(dependency);
+                } else {
+                    analysis.getDependencyDetails().getSockets().add(dependency);
+                }
+            }
+        }
+    }
+
+    private static String firstPropertyValue(String content, String property) {
+        Matcher matcher = Pattern.compile("<" + Pattern.quote(property) + ">\\s*([^<]+)\\s*</" + Pattern.quote(property) + ">",
+                Pattern.CASE_INSENSITIVE).matcher(content);
+        return matcher.find() ? matcher.group(1).trim() : "";
     }
 
     private void extractJavaVersion(String content, ProjectArtifactAnalysis analysis) {

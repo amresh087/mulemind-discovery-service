@@ -4,7 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.mulemind.discovery.dto.ApiEndpoint;
+import com.mulemind.discovery.dto.ApplicationDetails;
+import com.mulemind.discovery.dto.ConnectorDetails;
+import com.mulemind.discovery.dto.DependencyDetails;
 import com.mulemind.discovery.dto.FlowDetail;
+import com.mulemind.discovery.dto.FlowReference;
+import com.mulemind.discovery.dto.IntegrationDetails;
 import com.mulemind.discovery.dto.TransformationDetail;
 import com.mulemind.discovery.dto.VariableDetail;
 
@@ -18,6 +23,23 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ProjectArtifactAnalysis {
+
+    private ApplicationDetails application;
+
+    @Builder.Default
+    private List<ConnectorDetails> connectorDetails = new ArrayList<>();
+
+    @Builder.Default
+    private List<FlowReference> flowReferenceDetails = new ArrayList<>();
+
+    @Builder.Default
+    private IntegrationDetails integrations = IntegrationDetails.builder().build();
+
+    @Builder.Default
+    private DependencyDetails dependencyDetails = DependencyDetails.builder().build();
+
+    @Builder.Default
+    private List<String> sourceFiles = new ArrayList<>();
 
     @Builder.Default
     private List<String> apis = new ArrayList<>();

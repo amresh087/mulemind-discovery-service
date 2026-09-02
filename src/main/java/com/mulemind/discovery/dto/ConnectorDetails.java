@@ -9,10 +9,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TransformationDetail {
-
+public class ConnectorDetails {
     private String type;
-    private String flow;
-    private String outputMimeType;
-    private String logic;
+    private String version;
 }
