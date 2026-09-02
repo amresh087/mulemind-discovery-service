@@ -1,18 +1,30 @@
 package com.mulemind.discovery.kafka;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import com.mulemind.discovery.dto.DocumentKafkaEvent;
+import com.mulemind.discovery.dto.ProjectScanResultEvent;
+import com.mulemind.discovery.service.ProjectArchiveProcessingService;
+import com.mulemind.discovery.service.ProjectArtifactAnalysis;
+import com.mulemind.discovery.service.ProjectScanResultService;
+
+import lombok.RequiredArgsConstructor;
 
 @Component
+@RequiredArgsConstructor
 public class TransformationEventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(TransformationEventConsumer.class);
 
-    
+    private final ProjectArchiveProcessingService projectArchiveProcessingService;
+    private final ProjectScanResultService projectScanResultService;
+    private final DiscoveryKafkaProducer discoveryKafkaProducer;
+
     @KafkaListener(topics = "${app.kafka.topic.mulemind-upload-events}", groupId = "${spring.kafka.consumer.group-id}")
     public void onProjectUploaded(DocumentKafkaEvent event) {
         handleEvent(event, "mulemind-upload-events");
@@ -25,6 +37,37 @@ public class TransformationEventConsumer {
         }
 
         log.info("Received Kafka event from topic {}: {}", topic, event);
-        // transactionService.processTransformationEvent(event);
+
+        try {
+            ProjectArtifactAnalysis analysis = projectArchiveProcessingService.processUploadedProject(event);
+
+            ProjectScanResultEvent scanResult = ProjectScanResultEvent.builder()
+                    .documentId(event.getId())
+                    .documentName(event.getName())
+                    .tenant(event.getTenant())
+                    .objectName(event.getObjectName())
+                    .status("SCANNED")
+                    .apis(List.copyOf(analysis.getApis()))
+                    .kafkaTopics(List.copyOf(analysis.getKafkaTopics()))
+                    .mqEndpoints(List.copyOf(analysis.getMqEndpoints()))
+                    .dbOperations(List.copyOf(analysis.getDbOperations()))
+                    .fileOperations(List.copyOf(analysis.getFileOperations()))
+                    .extractedFiles(List.copyOf(analysis.getExtractedFiles()))
+                    .build();
+
+            projectScanResultService.save(scanResult);
+            discoveryKafkaProducer.send(scanResult, event.getId() != null ? event.getId().toString() : event.getName());
+
+            log.info("Archive inspection completed for object {}. APIs={}, KafkaTopics={}, MQ={}, DB={}, Files={}",
+                    event.getObjectName(),
+                    analysis.getApis(),
+                    analysis.getKafkaTopics(),
+                    analysis.getMqEndpoints(),
+                    analysis.getDbOperations(),
+                    analysis.getFileOperations());
+        } catch (Exception ex) {
+            log.error("Archive processing failed for document {} object {} in topic {}",
+                    event.getId(), event.getObjectName(), topic, ex);
+        }
     }
 }
