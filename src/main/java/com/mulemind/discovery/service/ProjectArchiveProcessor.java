@@ -15,6 +15,10 @@ import java.util.zip.ZipInputStream;
 
 import org.springframework.stereotype.Component;
 
+import com.mulemind.discovery.dto.ApiEndpoint;
+import com.mulemind.discovery.dto.FlowDetail;
+import com.mulemind.discovery.dto.TransformationDetail;
+import com.mulemind.discovery.dto.VariableDetail;
 import com.mulemind.discovery.util.ZipExtractorUtil;
 
 @Component
@@ -103,7 +107,6 @@ public class ProjectArchiveProcessor {
             if (shouldSkipEntry(fileName)) {
                 continue;
             }
-            System.out.println("-------------- File: " + fileName + "--------------Content Length: " + content.length());
             analysis.getExtractedFiles().add(fileName);
             analyzeContent(fileName, content, analysis);
         }
@@ -347,8 +350,10 @@ public class ProjectArchiveProcessor {
      * @param analysis
      */
     private void analyzeMuleFlowXml(String content, ProjectArtifactAnalysis analysis) {
+        extractStructuredMuleDetails(content, analysis);
         extractMuleFlows(content, analysis);
         extractHttpListeners(content, analysis);
+        addAttributeValues(content, "path", analysis.getApis(), "listener", "request");
         extractFlowReferences(content, analysis);
         extractTransformations(content, analysis);
         extractChoices(content, analysis);
@@ -357,9 +362,126 @@ public class ProjectArchiveProcessor {
         extractMqEndpoints(content, analysis);
         extractDbOperations(content, analysis);
         extractFileOperations(content, analysis);
+        analysis.getFileOperations().removeIf(fileOperation -> analysis.getHttpListeners().stream()
+            .anyMatch(listener -> listener.equalsIgnoreCase(fileOperation)));
         extractErrorHandlers(content, analysis);
         extractVariables(content, analysis);
         extractSubflows(content, analysis);
+    }
+
+    private void extractStructuredMuleDetails(String content, ProjectArtifactAnalysis analysis) {
+        Map<String, String> listenerConfigs = new java.util.HashMap<>();
+        Matcher configMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?listener-config\\b([^>]*)>(.*?)</(?:[A-Za-z_][\\w.-]*:)?listener-config\\s*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        while (configMatcher.find()) {
+            String configName = attribute(configMatcher.group(1), "name");
+            Matcher connectionMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?listener-connection\\b([^>]*)/?>",
+                    Pattern.CASE_INSENSITIVE).matcher(configMatcher.group(2));
+            if (connectionMatcher.find()) {
+                listenerConfigs.put(configName, connectionMatcher.group(1));
+            }
+        }
+
+        Matcher flowMatcher = Pattern.compile("<(?:(?:[A-Za-z_][\\w.-]*):)?(flow|sub-flow)\\b([^>]*)>(.*?)</(?:(?:[A-Za-z_][\\w.-]*):)?\\1\\s*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        while (flowMatcher.find()) {
+            String flowType = flowMatcher.group(1).toUpperCase(Locale.ROOT);
+            String flowAttributes = flowMatcher.group(2);
+            String flowBody = flowMatcher.group(3);
+            String flowName = attribute(flowAttributes, "name");
+                FlowDetail flow = FlowDetail.builder()
+                    .name(flowName)
+                        .type(flowType)
+                        .build();
+
+            Matcher processorMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?([A-Za-z_][\\w.-]*)(?:\\s[^>]*)?/?>",
+                    Pattern.CASE_INSENSITIVE).matcher(flowBody);
+            while (processorMatcher.find()) {
+                String processor = processorMatcher.group(1);
+                if (Set.of("listener", "message", "set-payload", "mule", "doc").contains(processor.toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
+                flow.getProcessors().add(processor.equalsIgnoreCase("transform") ? "transform" : processor);
+            }
+
+            Matcher referenceMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?flow-ref\\b([^>]*)/?>",
+                    Pattern.CASE_INSENSITIVE).matcher(flowBody);
+            while (referenceMatcher.find()) {
+                addUnique(flow.getReferences(), attribute(referenceMatcher.group(1), "name"));
+            }
+
+            Matcher listenerMatcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?listener\\b([^>]*)/?>",
+                    Pattern.CASE_INSENSITIVE).matcher(flowBody);
+            if (listenerMatcher.find()) {
+                String listenerAttributes = listenerMatcher.group(1);
+                String configName = attribute(listenerAttributes, "config-ref");
+                String path = attribute(listenerAttributes, "path");
+                String connection = listenerConfigs.getOrDefault(configName, "");
+                flow.setTrigger("HTTP " + path);
+                analysis.getApiDetails().add(ApiEndpoint.builder()
+                        .type("HTTP")
+                        .method(defaultValue(attribute(listenerAttributes, "method"), "ANY"))
+                        .path(path)
+                        .listenerConfig(configName)
+                        .host(attribute(connection, "host"))
+                        .port(parsePort(attribute(connection, "port")))
+                        .flow(flowName)
+                        .build());
+            }
+
+            analysis.getFlowDetails().add(flow);
+            extractStructuredVariables(flowBody, flowName, analysis);
+            extractStructuredTransformations(flowBody, flowName, analysis);
+        }
+    }
+
+    private void extractStructuredVariables(String flowBody, String flowName, ProjectArtifactAnalysis analysis) {
+        Matcher matcher = Pattern.compile("<(?:[A-Za-z_][\\w.-]*:)?set-variable\\b([^>]*)/?>",
+                Pattern.CASE_INSENSITIVE).matcher(flowBody);
+        while (matcher.find()) {
+            String attributes = matcher.group(1);
+            analysis.getVariableDetails().add(VariableDetail.builder()
+                    .name(attribute(attributes, "variableName"))
+                    .expression(attribute(attributes, "value"))
+                    .flow(flowName)
+                    .build());
+        }
+    }
+
+    private void extractStructuredTransformations(String flowBody, String flowName,
+            ProjectArtifactAnalysis analysis) {
+        Matcher matcher = Pattern.compile("<(?:(?:[A-Za-z_][\\w.-]*):)?transform\\b[^>]*>.*?<(?:(?:[A-Za-z_][\\w.-]*):)?set-payload\\b[^>]*>\\s*<!\\[CDATA\\[(.*?)\\]\\]>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(flowBody);
+        while (matcher.find()) {
+            String script = matcher.group(1).trim();
+            String[] scriptLines = script.split("---", 2);
+            String body = scriptLines.length == 2 ? scriptLines[1].trim() : script;
+            Matcher outputMatcher = Pattern.compile("output\\s+([^\\s]+)", Pattern.CASE_INSENSITIVE).matcher(script);
+            analysis.getTransformationDetails().add(TransformationDetail.builder()
+                    .type("DataWeave")
+                    .flow(flowName)
+                    .outputMimeType(outputMatcher.find() ? outputMatcher.group(1) : "")
+                    .script(body)
+                    .build());
+        }
+    }
+
+    private static String attribute(String attributes, String name) {
+        Matcher matcher = Pattern.compile("(?<![\\w:.-])" + Pattern.quote(name) + "\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']",
+                Pattern.CASE_INSENSITIVE).matcher(attributes == null ? "" : attributes);
+        return matcher.find() ? matcher.group(1).trim() : "";
+    }
+
+    private static String defaultValue(String value, String fallback) {
+        return value.isBlank() ? fallback : value;
+    }
+
+    private static Integer parsePort(String value) {
+        try {
+            return value.isBlank() ? null : Integer.valueOf(value);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private void extractMuleVersion(String content, ProjectArtifactAnalysis analysis) {

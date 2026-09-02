@@ -3,6 +3,11 @@ package com.mulemind.discovery.service;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.mulemind.discovery.dto.ApiEndpoint;
+import com.mulemind.discovery.dto.FlowDetail;
+import com.mulemind.discovery.dto.TransformationDetail;
+import com.mulemind.discovery.dto.VariableDetail;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,6 +21,18 @@ public class ProjectArtifactAnalysis {
 
     @Builder.Default
     private List<String> apis = new ArrayList<>();
+
+    @Builder.Default
+    private List<ApiEndpoint> apiDetails = new ArrayList<>();
+
+    @Builder.Default
+    private List<FlowDetail> flowDetails = new ArrayList<>();
+
+    @Builder.Default
+    private List<VariableDetail> variableDetails = new ArrayList<>();
+
+    @Builder.Default
+    private List<TransformationDetail> transformationDetails = new ArrayList<>();
 
     @Builder.Default
     private List<String> kafkaTopics = new ArrayList<>();

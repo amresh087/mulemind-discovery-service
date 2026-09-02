@@ -23,7 +23,16 @@ public class ProjectScanResultEvent {
     private String status;
 
     @Builder.Default
-    private List<String> apis = new ArrayList<>();
+    private List<ApiEndpoint> apis = new ArrayList<>();
+
+    @Builder.Default
+    private List<FlowDetail> flows = new ArrayList<>();
+
+    @Builder.Default
+    private List<VariableDetail> variables = new ArrayList<>();
+
+    @Builder.Default
+    private List<TransformationDetail> transformations = new ArrayList<>();
 
     @Builder.Default
     private List<String> kafkaTopics = new ArrayList<>();
