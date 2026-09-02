@@ -1,0 +1,61 @@
+server:
+  port: 5057
+
+spring:
+  application:
+    name: mulemind-discovery-service
+
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connectTimeout: 10000      # 10 seconds
+            readTimeout: 300000        # 5 minutes
+            loggerLevel: full
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:mulemind-discovery-service-group-dev}
+      auto-offset-reset: earliest
+      enable-auto-commit: true
+      key-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.key.delegate.class: org.apache.kafka.common.serialization.StringDeserializer
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: "*"
+        spring.json.use.type.headers: false
+        spring.json.value.default.type: com.mulemind.discovery.dto.DocumentKafkaEvent
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/mulemind_db
+    username: root
+    password: ellenverma
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+app:
+  kafka:
+    topic:
+      mulemind-upload-events: mules-project-uploaded
+      mulemind-scan-event: mules-scan-completed
+
+
+document:
+  service:
+    url: http://localhost:5054
+
+ai:
+  service:
+    url: http://localhost:5056
+
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket-name: documents
