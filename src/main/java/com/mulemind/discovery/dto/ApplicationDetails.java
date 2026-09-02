@@ -17,4 +17,6 @@ public class ApplicationDetails {
     private String packaging;
     private String muleRuntime;
     private String muleMavenPluginVersion;
+    private String minMuleVersion;
+    private java.util.List<String> javaSpecificationVersions;
 }

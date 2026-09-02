@@ -10,7 +10,10 @@ import com.mulemind.discovery.dto.DependencyDetails;
 import com.mulemind.discovery.dto.FlowDetail;
 import com.mulemind.discovery.dto.FlowReference;
 import com.mulemind.discovery.dto.IntegrationDetails;
+import com.mulemind.discovery.dto.RuntimeInfo;
+import com.mulemind.discovery.dto.SourceFileDetails;
 import com.mulemind.discovery.dto.TransformationDetail;
+import com.mulemind.discovery.dto.TypeMetadata;
 import com.mulemind.discovery.dto.VariableDetail;
 
 import lombok.AllArgsConstructor;
@@ -40,6 +43,12 @@ public class ProjectArtifactAnalysis {
 
     @Builder.Default
     private List<String> sourceFiles = new ArrayList<>();
+
+    @Builder.Default
+    private List<SourceFileDetails> sourceFileDetails = new ArrayList<>();
+
+    private RuntimeInfo runtimeInfo;
+    private TypeMetadata typeMetadata;
 
     @Builder.Default
     private List<String> apis = new ArrayList<>();

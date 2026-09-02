@@ -43,6 +43,9 @@ spring:
     show-sql: true
 
 app:
+  scan-event:
+    type: MULE_APPLICATION_SCANNED
+    version: "1.0"
   kafka:
     topic:
       mulemind-upload-events: mules-project-uploaded

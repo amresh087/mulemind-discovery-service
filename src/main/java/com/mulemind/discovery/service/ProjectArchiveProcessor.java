@@ -21,6 +21,9 @@ import com.mulemind.discovery.dto.ConnectorDetails;
 import com.mulemind.discovery.dto.FlowDetail;
 import com.mulemind.discovery.dto.FlowReference;
 import com.mulemind.discovery.dto.FlowTrigger;
+import com.mulemind.discovery.dto.RuntimeInfo;
+import com.mulemind.discovery.dto.SourceFileDetails;
+import com.mulemind.discovery.dto.TypeMetadata;
 import com.mulemind.discovery.dto.TransformationDetail;
 import com.mulemind.discovery.dto.VariableDetail;
 import com.mulemind.discovery.util.ZipExtractorUtil;
@@ -112,6 +115,10 @@ public class ProjectArchiveProcessor {
             }
             analysis.getExtractedFiles().add(fileName);
             analysis.getSourceFiles().add(fileName);
+                analysis.getSourceFileDetails().add(SourceFileDetails.builder()
+                    .name(Path.of(fileName).getFileName().toString())
+                    .parsed(true)
+                    .build());
             analyzeContent(fileName, content, analysis);
         }
         return analysis;
@@ -279,6 +286,11 @@ public class ProjectArchiveProcessor {
             return;
         }
 
+        if (normalizedName.endsWith("application-types.xml")) {
+            analyzeApplicationTypes(content, analysis);
+            return;
+        }
+
         // ---------------------------------------------------------
         // 3. Mule flow XML
         // src/main/mule/**/*.xml
@@ -336,6 +348,8 @@ public class ProjectArchiveProcessor {
             .packaging(firstTagValue(content, "packaging"))
             .muleRuntime(firstPropertyValue(content, "app.runtime"))
             .muleMavenPluginVersion(firstPropertyValue(content, "mule.maven.plugin.version"))
+                .minMuleVersion("")
+                .javaSpecificationVersions(new java.util.ArrayList<>())
             .build());
         extractPomConnectors(content, analysis);
         analysis.setDependencyDetails(com.mulemind.discovery.dto.DependencyDetails.builder()
@@ -359,6 +373,32 @@ public class ProjectArchiveProcessor {
         extractApplicationName(content, analysis);
         extractMuleRuntime(content, analysis);
         extractArtifactProperties(content, analysis);
+        String minMuleVersion = firstJsonValue(content, "minMuleVersion");
+        List<String> javaVersions = jsonArrayValues(content, "javaSpecificationVersions");
+        ApplicationDetails application = analysis.getApplication();
+        if (application == null) {
+            application = ApplicationDetails.builder().build();
+        }
+        application.setMinMuleVersion(minMuleVersion);
+        application.setJavaSpecificationVersions(javaVersions);
+        analysis.setApplication(application);
+        analysis.setRuntimeInfo(RuntimeInfo.builder()
+                .minMuleVersion(minMuleVersion)
+                .javaSpecificationVersions(javaVersions)
+                .build());
+    }
+
+    private void analyzeApplicationTypes(String content, ProjectArtifactAnalysis analysis) {
+        TypeMetadata.PayloadMetadata inputPayload = payloadMetadata(content, "Input-Payload");
+        TypeMetadata.PayloadMetadata outputPayload = payloadMetadata(content, "Output-Payload");
+        TypeMetadata.AttributeMetadata inputAttributes = attributeMetadata(content, "Input-Attributes");
+        TypeMetadata.AttributeMetadata outputAttributes = attributeMetadata(content, "Output-Attributes");
+        analysis.setTypeMetadata(TypeMetadata.builder()
+                .inputPayload(inputPayload)
+                .outputPayload(outputPayload)
+                .inputAttributes(inputAttributes)
+                .outputAttributes(outputAttributes)
+                .build());
     }
 
     /**
@@ -437,11 +477,14 @@ public class ProjectArchiveProcessor {
                 String listenerAttributes = listenerMatcher.group(1);
                 String configName = attribute(listenerAttributes, "config-ref");
                 String path = attribute(listenerAttributes, "path");
+                String configuredMethod = nullIfBlank(attribute(listenerAttributes, "method"));
+                String method = configuredMethod == null ? "GET" : configuredMethod;
                 String connection = listenerConfigs.getOrDefault(configName, "");
                 flow.setTrigger(FlowTrigger.builder().type("HTTP").path(path).build());
                 analysis.getApiDetails().add(ApiEndpoint.builder()
-                        .type("HTTP")
-                        .method(nullIfBlank(attribute(listenerAttributes, "method")))
+                    .type(resolveListenerType(content, listenerAttributes))
+                    .method(method)
+                    .methodRestricted(configuredMethod != null)
                         .path(path)
                         .listenerConfig(configName)
                         .host(attribute(connection, "host"))
@@ -518,16 +561,42 @@ public class ProjectArchiveProcessor {
             String block = matcher.group(1);
             String artifact = firstTagValue(block, "artifactId");
             String version = firstTagValue(block, "version");
-            String type = artifact.toLowerCase(Locale.ROOT).contains("sockets") ? "SOCKETS" : "HTTP";
-            if (artifact.contains("http-connector") || artifact.contains("sockets-connector")) {
+            String type = connectorType(artifact);
+            if (type != null) {
                 analysis.getConnectorDetails().add(ConnectorDetails.builder().type(type).version(version).build());
                 String dependency = artifact + ":" + version;
-                if ("HTTP".equals(type)) {
-                    analysis.getDependencyDetails().getHttp().add(dependency);
-                } else {
-                    analysis.getDependencyDetails().getSockets().add(dependency);
-                }
+                addConnectorDependency(analysis, type, dependency);
             }
+        }
+    }
+
+    private static String resolveListenerType(String content, String listenerAttributes) {
+        String configRef = attribute(listenerAttributes, "config-ref");
+        Pattern pattern = Pattern.compile("<([A-Za-z_][\\w.-]*):listener\\b[^>]*\\bconfig-ref\\s*=\\s*[\\\"']"
+                + Pattern.quote(configRef) + "[\\\"']", Pattern.CASE_INSENSITIVE);
+        Matcher matcher = pattern.matcher(content);
+        return matcher.find() ? matcher.group(1).toUpperCase(Locale.ROOT) : "HTTP";
+    }
+
+    private static String connectorType(String artifact) {
+        if (artifact == null || artifact.isBlank()) {
+            return null;
+        }
+        String normalized = artifact.toLowerCase(Locale.ROOT);
+        int connectorIndex = normalized.lastIndexOf("-connector");
+        if (connectorIndex < 0) {
+            return null;
+        }
+        String type = artifact.substring(0, connectorIndex);
+        int separator = type.lastIndexOf('-');
+        return (separator >= 0 ? type.substring(separator + 1) : type).toUpperCase(Locale.ROOT);
+    }
+
+    private static void addConnectorDependency(ProjectArtifactAnalysis analysis, String type, String dependency) {
+        if ("HTTP".equals(type)) {
+            addUnique(analysis.getDependencyDetails().getHttp(), dependency);
+        } else if ("SOCKETS".equals(type)) {
+            addUnique(analysis.getDependencyDetails().getSockets(), dependency);
         }
     }
 
@@ -535,6 +604,93 @@ public class ProjectArchiveProcessor {
         Matcher matcher = Pattern.compile("<" + Pattern.quote(property) + ">\\s*([^<]+)\\s*</" + Pattern.quote(property) + ">",
                 Pattern.CASE_INSENSITIVE).matcher(content);
         return matcher.find() ? matcher.group(1).trim() : "";
+    }
+
+    private static String firstJsonValue(String content, String key) {
+        Matcher matcher = Pattern.compile("[\\\"']" + Pattern.quote(key)
+                + "[\\\"']\\s*:\\s*[\\\"']([^\\\"']+)[\\\"']", Pattern.CASE_INSENSITIVE).matcher(content);
+        return matcher.find() ? matcher.group(1).trim() : "";
+    }
+
+    private static List<String> jsonArrayValues(String content, String key) {
+        Matcher arrayMatcher = Pattern.compile("[\\\"']" + Pattern.quote(key)
+                + "[\\\"']\\s*:\\s*\\[(.*?)]", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        if (!arrayMatcher.find()) {
+            return new java.util.ArrayList<>();
+        }
+        List<String> values = new java.util.ArrayList<>();
+        Matcher valueMatcher = Pattern.compile("[\\\"']([^\\\"']+)[\\\"']").matcher(arrayMatcher.group(1));
+        while (valueMatcher.find()) {
+            addUnique(values, valueMatcher.group(1));
+        }
+        return values;
+    }
+
+    private static TypeMetadata.PayloadMetadata payloadMetadata(String content, String suffix) {
+        Matcher matcher = Pattern.compile("<types:type\\b[^>]*\\bname\\s*=\\s*[\\\"'][^\\\"']*"
+                + Pattern.quote(suffix) + "[\\\"'][^>]*>(.*?)</types:type\\s*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        if (!matcher.find()) {
+            return null;
+        }
+        String block = matcher.group(1);
+        String name = suffix;
+        String format = firstAttributeValue(matcher.group(), "format");
+        String declaration = cdataContent(block);
+        int nestedTypeStart = declaration.indexOf("\ntype org_");
+        if (nestedTypeStart >= 0) {
+            declaration = declaration.substring(0, nestedTypeStart);
+        }
+        String type = declaration.matches("(?s).*\\s=\\s*Any\\b.*") ? "Any" : null;
+        java.util.Map<String, String> schema = new java.util.LinkedHashMap<>();
+        Matcher fieldMatcher = Pattern.compile("\\b([A-Za-z][\\w]*)\\s*:\\s*([A-Za-z][\\w]*)").matcher(declaration);
+        while (fieldMatcher.find()) {
+            schema.put(fieldMatcher.group(1), fieldMatcher.group(2));
+        }
+        return TypeMetadata.PayloadMetadata.builder().name(name).format(format).type(type).schema(schema.isEmpty() ? null : schema).build();
+    }
+
+    private static TypeMetadata.AttributeMetadata attributeMetadata(String content, String suffix) {
+        Matcher matcher = Pattern.compile("<types:type\\b[^>]*\\bname\\s*=\\s*[\\\"'][^\\\"']*"
+                + Pattern.quote(suffix) + "[\\\"'][^>]*>(.*?)</types:type\\s*>",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(content);
+        if (!matcher.find()) {
+            return null;
+        }
+        String block = matcher.group(1);
+        String declaration = cdataContent(block);
+        int nestedTypeStart = declaration.indexOf("\ntype org_");
+        if (nestedTypeStart >= 0) {
+            declaration = declaration.substring(0, nestedTypeStart);
+        }
+        Matcher typeMatcher = Pattern.compile("typeAlias\\\"\\s*:\\s*\\\"([^\\\"]+)").matcher(block);
+        String type = "";
+        while (typeMatcher.find()) {
+            type = typeMatcher.group(1);
+            if (type.toLowerCase(Locale.ROOT).contains("httprequestattributes")) {
+                break;
+            }
+        }
+        if (type.isBlank()) {
+            type = "HttpRequestAttributes";
+        }
+        List<String> fields = new java.util.ArrayList<>();
+        Matcher fieldMatcher = Pattern.compile("\\b([A-Za-z][\\w]*)\\??\\s*:").matcher(declaration);
+        while (fieldMatcher.find()) {
+            addUnique(fields, fieldMatcher.group(1));
+        }
+        return TypeMetadata.AttributeMetadata.builder().type(type).fields(fields).build();
+    }
+
+    private static String cdataContent(String content) {
+        Matcher matcher = Pattern.compile("<!\\[CDATA\\[(.*?)\\]\\]>", Pattern.DOTALL).matcher(content);
+        return matcher.find() ? matcher.group(1) : content;
+    }
+
+    private static String firstAttributeValue(String content, String attribute) {
+        Matcher matcher = Pattern.compile("\\b" + Pattern.quote(attribute) + "\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']",
+                Pattern.CASE_INSENSITIVE).matcher(content);
+        return matcher.find() ? matcher.group(1) : "";
     }
 
     private void extractJavaVersion(String content, ProjectArtifactAnalysis analysis) {

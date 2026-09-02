@@ -5,6 +5,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.mulemind.discovery.dto.DocumentKafkaEvent;
@@ -25,6 +26,12 @@ public class TransformationEventConsumer {
     private final ProjectScanResultService projectScanResultService;
     private final DiscoveryKafkaProducer discoveryKafkaProducer;
 
+    @Value("${app.scan-event.type:MULE_APPLICATION_SCANNED}")
+    private String scanEventType;
+
+    @Value("${app.scan-event.version:1.0}")
+    private String scanEventVersion;
+
     @KafkaListener(topics = "${app.kafka.topic.mulemind-upload-events}", groupId = "${spring.kafka.consumer.group-id}")
     public void onProjectUploaded(DocumentKafkaEvent event) {
         handleEvent(event, "mulemind-upload-events");
@@ -43,8 +50,8 @@ public class TransformationEventConsumer {
 
             ProjectScanResultEvent scanResult = ProjectScanResultEvent.builder()
                     .documentId(event.getId())
-                    .eventType("MULE_APPLICATION_SCANNED")
-                    .eventVersion("1.0")
+                    .eventType(scanEventType)
+                    .eventVersion(scanEventVersion)
                     .documentName(event.getName())
                     .tenant(event.getTenant())
                     .objectName(event.getObjectName())
@@ -56,6 +63,8 @@ public class TransformationEventConsumer {
                     .flowReferences(List.copyOf(analysis.getFlowReferenceDetails()))
                     .variables(List.copyOf(analysis.getVariableDetails()))
                     .transformations(List.copyOf(analysis.getTransformationDetails()))
+                    .runtimeInfo(analysis.getRuntimeInfo())
+                    .typeMetadata(analysis.getTypeMetadata())
                         .integrations(com.mulemind.discovery.dto.IntegrationDetails.builder()
                             .kafka(List.copyOf(analysis.getKafkaTopics()))
                             .mq(List.copyOf(analysis.getMqEndpoints()))
@@ -64,7 +73,7 @@ public class TransformationEventConsumer {
                             .externalHttp(List.of())
                             .build())
                     .dependencies(analysis.getDependencyDetails())
-                    .sourceFiles(List.copyOf(analysis.getSourceFiles()))
+                    .sourceFiles(List.copyOf(analysis.getSourceFileDetails()))
                     .kafkaTopics(List.copyOf(analysis.getKafkaTopics()))
                     .mqEndpoints(List.copyOf(analysis.getMqEndpoints()))
                     .dbOperations(List.copyOf(analysis.getDbOperations()))

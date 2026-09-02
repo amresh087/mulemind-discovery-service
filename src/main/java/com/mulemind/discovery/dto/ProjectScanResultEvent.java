@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -51,7 +52,10 @@ public class ProjectScanResultEvent {
     private DependencyDetails dependencies;
 
     @Builder.Default
-    private List<String> sourceFiles = new ArrayList<>();
+    private List<SourceFileDetails> sourceFiles = new ArrayList<>();
+
+    private RuntimeInfo runtimeInfo;
+    private TypeMetadata typeMetadata;
 
     @Builder.Default
     private List<String> kafkaTopics = new ArrayList<>();
@@ -70,5 +74,6 @@ public class ProjectScanResultEvent {
     private List<String> extractedFiles = new ArrayList<>();
 
     @Builder.Default
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
     private LocalDateTime scannedAt = LocalDateTime.now();
 }
