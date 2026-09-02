@@ -67,3 +67,4 @@ project:
   archive:
     storage-path: /Users/amreshverma/mule_down_extract
     extraction-folder: /Users/amreshverma/mule_down_extract
+    temp-directory-prefix: mulemind-project-

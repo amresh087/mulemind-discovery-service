@@ -33,6 +33,9 @@ public class ProjectArchiveProcessingService {
     @Value("${project.archive.storage-path}")
     private String archiveStoragePath;
 
+    @Value("${project.archive.temp-directory-prefix}")
+    private String tempDirectoryPrefix;
+
     public ProjectArtifactAnalysis processUploadedProject(DocumentKafkaEvent event) {
         if (event == null) {
             log.warn("Received null Kafka event for project processing");
@@ -48,23 +51,25 @@ public class ProjectArchiveProcessingService {
         try {
             Path storagePath = Path.of(archiveStoragePath);
             Files.createDirectories(storagePath);
-            workDirectory = Files.createTempDirectory(storagePath, "mulemind-project-");
+            workDirectory = Files.createTempDirectory(storagePath, tempDirectoryPrefix);
             String archiveFileName = StringUtils.hasText(event.getName())? Path.of(event.getName()).getFileName().toString() : "project.zip";
             Path archivePath = workDirectory.resolve(archiveFileName);
             Path extractionDirectory = workDirectory;
 
             try (InputStream objectStream = minioClient.getObject(
                     GetObjectArgs.builder().bucket(bucketName).object(event.getObjectName()).build())) {
+                // ZIP on disk
                 Files.copy(objectStream, archivePath);
             }
 
+            // entire ZIP in memory
             byte[] archiveBytes = Files.readAllBytes(archivePath);
             projectArchiveProcessor.extractArchive(archiveBytes, extractionDirectory);
-            return projectArchiveProcessor.parseArchive(archiveBytes);
+            return projectArchiveProcessor.parseArchive(archiveBytes,extractionDirectory);
         } catch (Exception ex) {
             throw new IllegalStateException("Unable to process project archive from MinIO", ex);
         } finally {
-           // deleteDirectory(workDirectory);
+           deleteDirectory(workDirectory);
         }
     }
 
