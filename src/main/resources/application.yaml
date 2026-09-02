@@ -62,3 +62,8 @@ minio:
   access-key: minioadmin
   secret-key: minioadmin
   bucket-name: documents
+
+project:
+  archive:
+    storage-path: /Users/amreshverma/mule_down_extract
+    extraction-folder: /Users/amreshverma/mule_down_extract

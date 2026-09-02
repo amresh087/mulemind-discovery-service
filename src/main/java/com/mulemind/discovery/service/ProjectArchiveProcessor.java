@@ -4,8 +4,11 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -13,6 +16,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import org.springframework.stereotype.Component;
+
+import com.mulemind.discovery.util.ZipExtractorUtil;
 
 @Component
 public class ProjectArchiveProcessor {
@@ -28,28 +33,71 @@ public class ProjectArchiveProcessor {
     private static final Pattern DB_PATTERN = Pattern.compile("(?:jdbc:[A-Za-z0-9._:/+-]+|\\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|ALTER TABLE|DROP TABLE|MERGE)\\b.*)", Pattern.CASE_INSENSITIVE);
     private static final Pattern FILE_PATTERN = Pattern.compile("(?:file|path|directory|folder|input|output|location).*?(?:=|:|\\()\\s*[\"']?([A-Za-z0-9_./\\:-]+)[\"']?", Pattern.CASE_INSENSITIVE);
 
+    public List<Path> extractArchive(byte[] archiveBytes, Path destinationDirectory) {
+        if (archiveBytes == null || archiveBytes.length == 0 || destinationDirectory == null) {
+            return List.of();
+        }
+
+        try {
+            Files.createDirectories(destinationDirectory);
+            Path destination = destinationDirectory.toAbsolutePath().normalize();
+            List<Path> extractedPaths = new java.util.ArrayList<>();
+
+            try (ZipInputStream zipInputStream = new ZipInputStream(
+                    new ByteArrayInputStream(sanitizeMalformedStoredEntries(archiveBytes)))) {
+                ZipEntry entry;
+                while ((entry = zipInputStream.getNextEntry()) != null) {
+                    if (entry.isDirectory() || ZipExtractorUtil.isMacOsMetadataEntry(entry.getName())) {
+                        continue;
+                    }
+
+                    Path outputPath = destination.resolve(entry.getName().replace('\\', '/')).normalize();
+                    if (!outputPath.startsWith(destination)) {
+                        throw new IllegalStateException("ZIP entry is outside extraction directory: " + entry.getName());
+                    }
+
+                    Files.createDirectories(outputPath.getParent());
+                    Files.write(outputPath, zipInputStream.readAllBytes());
+                    extractedPaths.add(outputPath);
+                }
+            }
+            return extractedPaths;
+        } catch (IOException ex) {
+            throw new IllegalStateException("Unable to extract project archive", ex);
+        }
+    }
+
     public ProjectArtifactAnalysis parseArchive(byte[] archiveBytes) {
         ProjectArtifactAnalysis analysis = new ProjectArtifactAnalysis();
         if (archiveBytes == null || archiveBytes.length == 0) {
             return analysis;
         }
 
-        byte[] zipBytes = sanitizeMalformedStoredEntries(archiveBytes);
+        Map<String, String> files =ZipExtractorUtil.extractAllFiles(archiveBytes);
 
+        files.forEach((fileName, content) -> {
+        System.out.println("-------------- File: " + fileName);
+        System.out.println("--------------Content Length: " + content.length());
+        });
+
+       // byte[] zipBytes = sanitizeMalformedStoredEntries(archiveBytes);
+
+        /* 
         try (ZipInputStream zipInputStream = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
             ZipEntry entry;
             while ((entry = zipInputStream.getNextEntry()) != null) {
+                String fileName = entry.getName();
+                System.out.println("All File entry: ************************ " + fileName);
                 if (entry.isDirectory()) {
                     continue;
                 }
 
-                String fileName = entry.getName();
+               
                 if (shouldSkipEntry(fileName)) {
                     continue;
                 }
 
                 System.out.println("Processing entry: ======================== " + fileName);
-
                 String content = readEntryContent(zipInputStream);
 
                 if (!content.isBlank()) {
@@ -60,6 +108,9 @@ public class ProjectArchiveProcessor {
         } catch (IOException ex) {
             throw new IllegalStateException("Unable to parse project archive", ex);
         }
+        */
+
+
 
         return analysis;
     }
@@ -78,9 +129,14 @@ public class ProjectArchiveProcessor {
                 int compressionMethod = readUnsignedShort(sanitized, offset + 8);
 
                 if (compressionMethod == 0 && (generalPurposeBitFlag & 0x0008) != 0) {
-                    int repairedFlag = generalPurposeBitFlag & ~0x0008;
-                    sanitized[offset + 6] = (byte) (repairedFlag & 0xFF);
-                    sanitized[offset + 7] = (byte) ((repairedFlag >>> 8) & 0xFF);
+                    int centralDirectoryOffset = findCentralDirectoryEntry(sanitized, offset);
+                    if (centralDirectoryOffset >= 0) {
+                        writeUnsignedShort(sanitized, offset + 6, generalPurposeBitFlag & ~0x0008);
+                        writeUnsignedShort(sanitized, offset + 8, readUnsignedShort(sanitized, centralDirectoryOffset + 10));
+                        writeInt(sanitized, offset + 14, readInt(sanitized, centralDirectoryOffset + 16));
+                        writeInt(sanitized, offset + 18, readInt(sanitized, centralDirectoryOffset + 20));
+                        writeInt(sanitized, offset + 22, readInt(sanitized, centralDirectoryOffset + 24));
+                    }
                 }
 
                 int fileNameLength = readUnsignedShort(sanitized, offset + 26);
@@ -108,6 +164,29 @@ public class ProjectArchiveProcessor {
                 | ((data[offset + 1] & 0xFF) << 8)
                 | ((data[offset + 2] & 0xFF) << 16)
                 | ((data[offset + 3] & 0xFF) << 24);
+    }
+
+    private static void writeUnsignedShort(byte[] data, int offset, int value) {
+        data[offset] = (byte) (value & 0xFF);
+        data[offset + 1] = (byte) ((value >>> 8) & 0xFF);
+    }
+
+    private static void writeInt(byte[] data, int offset, int value) {
+        data[offset] = (byte) (value & 0xFF);
+        data[offset + 1] = (byte) ((value >>> 8) & 0xFF);
+        data[offset + 2] = (byte) ((value >>> 16) & 0xFF);
+        data[offset + 3] = (byte) ((value >>> 24) & 0xFF);
+    }
+
+    private static int findCentralDirectoryEntry(byte[] data, int localHeaderOffset) {
+        for (int offset = 0; offset <= data.length - 46; offset++) {
+            if (data[offset] == 'P' && data[offset + 1] == 'K'
+                    && data[offset + 2] == 0x01 && data[offset + 3] == 0x02
+                    && readInt(data, offset + 42) == localHeaderOffset) {
+                return offset;
+            }
+        }
+        return -1;
     }
 
     private static boolean shouldSkipEntry(String fileName) {

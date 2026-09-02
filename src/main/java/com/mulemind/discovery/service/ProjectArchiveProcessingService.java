@@ -1,6 +1,10 @@
 package com.mulemind.discovery.service;
 
 import java.io.InputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +30,9 @@ public class ProjectArchiveProcessingService {
     @Value("${minio.bucket-name:documents}")
     private String bucketName;
 
+    @Value("${project.archive.storage-path}")
+    private String archiveStoragePath;
+
     public ProjectArtifactAnalysis processUploadedProject(DocumentKafkaEvent event) {
         if (event == null) {
             log.warn("Received null Kafka event for project processing");
@@ -37,28 +44,46 @@ public class ProjectArchiveProcessingService {
             return new ProjectArtifactAnalysis();
         }
 
-        try (InputStream objectStream = minioClient.getObject(
-                GetObjectArgs.builder()
-                        .bucket(bucketName)
-                        .object(event.getObjectName())
-                        .build())) {
+        Path workDirectory = null;
+        try {
+            Path storagePath = Path.of(archiveStoragePath);
+            Files.createDirectories(storagePath);
+            workDirectory = Files.createTempDirectory(storagePath, "mulemind-project-");
+            String archiveFileName = StringUtils.hasText(event.getName())? Path.of(event.getName()).getFileName().toString() : "project.zip";
+            Path archivePath = workDirectory.resolve(archiveFileName);
+            Path extractionDirectory = workDirectory;
 
-            byte[] archiveBytes = objectStream.readAllBytes();
-            ProjectArtifactAnalysis analysis = projectArchiveProcessor.parseArchive(archiveBytes);
+            try (InputStream objectStream = minioClient.getObject(
+                    GetObjectArgs.builder().bucket(bucketName).object(event.getObjectName()).build())) {
+                Files.copy(objectStream, archivePath);
+            }
 
-            log.info("Processed archived project {} from bucket {}. APIs={}, KafkaTopics={}, MQ={}, DB={}, Files={}",
-                    event.getObjectName(),
-                    bucketName,
-                    analysis.getApis().size(),
-                    analysis.getKafkaTopics().size(),
-                    analysis.getMqEndpoints().size(),
-                    analysis.getDbOperations().size(),
-                    analysis.getFileOperations().size());
-
-            return analysis;
+            byte[] archiveBytes = Files.readAllBytes(archivePath);
+            projectArchiveProcessor.extractArchive(archiveBytes, extractionDirectory);
+            return projectArchiveProcessor.parseArchive(archiveBytes);
         } catch (Exception ex) {
-            log.error("Failed to download and process project archive {} from MinIO bucket {}", event.getObjectName(), bucketName, ex);
             throw new IllegalStateException("Unable to process project archive from MinIO", ex);
+        } finally {
+           // deleteDirectory(workDirectory);
+        }
+    }
+
+    private void deleteDirectory(Path directory) {
+        if (directory == null) {
+            return;
+        }
+
+        try (var paths = Files.walk(directory)) {
+            paths.sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ex) {
+                            log.warn("Unable to delete temporary project archive path {}", path, ex);
+                        }
+                    });
+        } catch (IOException ex) {
+            log.warn("Unable to clean up temporary project archive directory {}", directory, ex);
         }
     }
 }

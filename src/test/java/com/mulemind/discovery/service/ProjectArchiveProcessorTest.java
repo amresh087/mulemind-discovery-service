@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -64,6 +66,52 @@ class ProjectArchiveProcessorTest {
         assertNotNull(analysis);
         assertFalse(analysis.getExtractedFiles().isEmpty());
         assertFalse(analysis.getApis().isEmpty());
+    }
+
+    @Test
+    void shouldScanMuleXmlFilesUnderSrcMainMule() throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zipOut = new ZipOutputStream(bos)) {
+            zipOut.putNextEntry(new ZipEntry("project/src/main/mule/xyz.xml"));
+            zipOut.write("<mule><flow name=\"orders\"><http:listener path=\"/orders\"/></flow></mule>"
+                    .getBytes(StandardCharsets.UTF_8));
+            zipOut.closeEntry();
+
+                zipOut.putNextEntry(new ZipEntry("project/src/main/mule/subfolder/deeper.xml"));
+                zipOut.write("<mule><flow name=\"customers\"/></mule>".getBytes(StandardCharsets.UTF_8));
+                zipOut.closeEntry();
+        }
+
+        ProjectArtifactAnalysis analysis = new ProjectArchiveProcessor().parseArchive(bos.toByteArray());
+
+        assertFalse(analysis.getExtractedFiles().stream()
+                .noneMatch(fileName -> fileName.equals("project/src/main/mule/xyz.xml")));
+            assertFalse(analysis.getExtractedFiles().stream()
+                .noneMatch(fileName -> fileName.equals("project/src/main/mule/subfolder/deeper.xml")));
+    }
+
+    @Test
+    void shouldExtractFolderAndSubfolderStructure() throws IOException {
+        byte[] zipBytes = buildNestedMuleZip();
+        Path destination = Files.createTempDirectory("mulemind-extract-");
+
+        new ProjectArchiveProcessor().extractArchive(zipBytes, destination);
+
+        assertFalse(Files.notExists(destination.resolve("project/src/main/mule/xyz.xml")));
+        assertFalse(Files.notExists(destination.resolve("project/src/main/mule/subfolder/deeper.xml")));
+    }
+
+    private byte[] buildNestedMuleZip() throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zipOut = new ZipOutputStream(bos)) {
+            zipOut.putNextEntry(new ZipEntry("project/src/main/mule/xyz.xml"));
+            zipOut.write("<mule/>".getBytes(StandardCharsets.UTF_8));
+            zipOut.closeEntry();
+            zipOut.putNextEntry(new ZipEntry("project/src/main/mule/subfolder/deeper.xml"));
+            zipOut.write("<mule/>".getBytes(StandardCharsets.UTF_8));
+            zipOut.closeEntry();
+        }
+        return bos.toByteArray();
     }
 
     private byte[] buildSampleZip() throws IOException {
