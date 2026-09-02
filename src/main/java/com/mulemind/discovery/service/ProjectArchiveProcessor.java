@@ -24,7 +24,6 @@ import com.mulemind.discovery.util.ZipExtractorUtil;
 @Component
 public class ProjectArchiveProcessor {
 
-    private static final Set<String> XML_EXTENSIONS = Set.of(".xml", ".xsd", ".wsdl");
     private static final Set<String> DWL_EXTENSIONS = Set.of(".dwl", ".dwl.xml");
     private static final Set<String> RAML_EXTENSIONS = Set.of(".raml", ".yaml", ".yml");
     private static final Set<String> PROPERTY_EXTENSIONS = Set.of(".properties", ".env", ".cfg");
