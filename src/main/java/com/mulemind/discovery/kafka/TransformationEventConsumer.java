@@ -16,6 +16,7 @@ import com.mulemind.discovery.dto.JobResponse;
 import com.mulemind.discovery.dto.ProjectScanResultEvent;
 import com.mulemind.discovery.service.ProjectArchiveProcessingService;
 import com.mulemind.discovery.service.ProjectArtifactAnalysis;
+import com.mulemind.discovery.util.TransformationStatus;
 
 import lombok.RequiredArgsConstructor;
 
@@ -26,7 +27,7 @@ public class TransformationEventConsumer {
     private static final Logger log = LoggerFactory.getLogger(TransformationEventConsumer.class);
 
     private final ProjectArchiveProcessingService projectArchiveProcessingService;
-   // private final ProjectScanResultService projectScanResultService;
+    // private final ProjectScanResultService projectScanResultService;
     private final DiscoveryKafkaProducer discoveryKafkaProducer;
     private final JobServiceClient jobServiceClient;
 
@@ -48,9 +49,9 @@ public class TransformationEventConsumer {
         }
 
         Map<String, String> payload = new HashMap<>();
-        payload.put("status", "Scanning");
-        JobResponse jobResponse = jobServiceClient.updateJobStatus(event.getId(), payload);           
-        System.out.println("============"+jobResponse.getStatus());
+        payload.put("status", TransformationStatus.SCANNING.name());
+        payload.put("description", TransformationStatus.SCANNING.getDescription());
+        jobServiceClient.updateJobStatus(event.getId(), payload);
 
         log.info("Received Kafka event from topic {}: {}", topic, event);
 
@@ -74,7 +75,7 @@ public class TransformationEventConsumer {
                     .transformations(List.copyOf(analysis.getTransformationDetails()))
                     .runtimeInfo(analysis.getRuntimeInfo())
                     .typeMetadata(analysis.getTypeMetadata())
-                        .integrations(com.mulemind.discovery.dto.IntegrationDetails.builder()
+                    .integrations(com.mulemind.discovery.dto.IntegrationDetails.builder()
                             .kafka(List.copyOf(analysis.getKafkaTopics()))
                             .mq(List.copyOf(analysis.getMqEndpoints()))
                             .database(List.copyOf(analysis.getDbOperations()))
@@ -90,18 +91,20 @@ public class TransformationEventConsumer {
                     .extractedFiles(List.copyOf(analysis.getExtractedFiles()))
                     .build();
 
-            //projectScanResultService.save(scanResult);
+            // projectScanResultService.save(scanResult);
             discoveryKafkaProducer.send(scanResult, event.getId() != null ? event.getId().toString() : event.getName());
 
-        payload = new HashMap<>();
-        payload.put("status", "Scan Completed");
-        jobResponse = jobServiceClient.updateJobStatus(event.getId(), payload);           
-        System.out.println("============"+jobResponse.getStatus());
+            payload = new HashMap<>();
+            payload.put("status", TransformationStatus.SCAN_COMPLETED.name());
+            payload.put("description", TransformationStatus.SCAN_COMPLETED.getDescription());
+            jobServiceClient.updateJobStatus(event.getId(), payload);
 
-           log.info("Successfully processed archive for document {} object {} in topic {}",event.getId(), event.getObjectName(), topic);
+            log.info("Successfully processed archive for document {} object {} in topic {}", event.getId(),
+                    event.getObjectName(), topic);
 
         } catch (Exception ex) {
-            log.error("Archive processing failed for document {} object {} in topic {}",event.getId(), event.getObjectName(), topic, ex);
+            log.error("Archive processing failed for document {} object {} in topic {}", event.getId(),
+                    event.getObjectName(), topic, ex);
         }
     }
 }
