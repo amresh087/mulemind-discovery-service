@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 
 import com.mulemind.discovery.client.JobServiceClient;
 import com.mulemind.discovery.dto.DocumentKafkaEvent;
-import com.mulemind.discovery.dto.JobResponse;
 import com.mulemind.discovery.dto.ProjectScanResultEvent;
 import com.mulemind.discovery.service.ProjectArchiveProcessingService;
 import com.mulemind.discovery.service.ProjectArtifactAnalysis;

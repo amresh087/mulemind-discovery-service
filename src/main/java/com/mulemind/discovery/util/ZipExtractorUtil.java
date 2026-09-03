@@ -20,9 +20,7 @@ public final class ZipExtractorUtil {
      * Value = file content as String
      */
     public static Map<String, String> extractAllFiles(byte[] zipBytes, Path temporaryArchive) {
-
         Map<String, String> files = new LinkedHashMap<>();
-
         if (zipBytes == null || zipBytes.length == 0) {
             return files;
         }
@@ -39,7 +37,6 @@ public final class ZipExtractorUtil {
                     continue;
                 }
                 String fileName = entry.getName();
-                System.out.println("Processing: " + fileName);
                 try (var inputStream = zipFile.getInputStream(entry)) {
                     files.put(fileName, new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
                 }
