@@ -46,11 +46,8 @@ public class TransformationEventConsumer {
             log.warn("Received null Kafka event from topic {}", topic);
             return;
         }
-
-        Map<String, String> payload = new HashMap<>();
-        payload.put("status", TransformationStatus.SCANNING.name());
-        payload.put("description", TransformationStatus.SCANNING.getDescription());
-        jobServiceClient.updateJobStatus(event.getId(), payload);
+        // Update job status to SCANNING
+        updateJobStatus(event, TransformationStatus.SCANNING);
 
         log.info("Received Kafka event from topic {}: {}", topic, event);
 
@@ -93,10 +90,7 @@ public class TransformationEventConsumer {
             // projectScanResultService.save(scanResult);
             discoveryKafkaProducer.send(scanResult, event.getId() != null ? event.getId().toString() : event.getName());
 
-            payload = new HashMap<>();
-            payload.put("status", TransformationStatus.SCAN_COMPLETED.name());
-            payload.put("description", TransformationStatus.SCAN_COMPLETED.getDescription());
-            jobServiceClient.updateJobStatus(event.getId(), payload);
+           
 
             log.info("Successfully processed archive for document {} object {} in topic {}", event.getId(),
                     event.getObjectName(), topic);
@@ -105,5 +99,13 @@ public class TransformationEventConsumer {
             log.error("Archive processing failed for document {} object {} in topic {}", event.getId(),
                     event.getObjectName(), topic, ex);
         }
+    }
+
+
+    private void updateJobStatus(DocumentKafkaEvent event, TransformationStatus status) {
+        Map<String, String> payload = new HashMap<>();
+        payload.put("status", status.name());
+        payload.put("description", status.getDescription());
+        jobServiceClient.updateJobStatus(event.getId(), payload);
     }
 }
