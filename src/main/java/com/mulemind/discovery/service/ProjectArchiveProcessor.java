@@ -13,6 +13,9 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.springframework.stereotype.Component;
 
 import com.mulemind.discovery.dto.ApiEndpoint;
@@ -34,6 +37,7 @@ public class ProjectArchiveProcessor {
     private static final Set<String> DWL_EXTENSIONS = Set.of(".dwl", ".dwl.xml");
     private static final Set<String> RAML_EXTENSIONS = Set.of(".raml", ".yaml", ".yml");
     private static final Set<String> PROPERTY_EXTENSIONS = Set.of(".properties", ".env", ".cfg");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private static final Pattern API_PATTERN = Pattern.compile("(?:<path>|<uri>|@Path\\(|/[-A-Za-z0-9_./{}]+)");
     private static final Pattern KAFKA_PATTERN = Pattern.compile(
@@ -121,6 +125,7 @@ public class ProjectArchiveProcessor {
                     .build());
             analyzeContent(fileName, content, analysis);
         }
+        resolveRequestFields(analysis);
         return analysis;
     }
 
@@ -291,11 +296,16 @@ public class ProjectArchiveProcessor {
             return;
         }
 
+        if (normalizedName.endsWith(".xml") && (normalizedName.contains("validation")
+            || content.toLowerCase(Locale.ROOT).contains("validation:"))) {
+            extractValidationRequestFields(content, analysis);
+        }
+
         // ---------------------------------------------------------
         // 3. Mule flow XML
         // src/main/mule/**/*.xml
         // ---------------------------------------------------------
-        if (normalizedName.contains("/src/main/mule/") && normalizedName.endsWith(".xml")) {
+        if (normalizedName.contains("src/main/mule/") && normalizedName.endsWith(".xml")) {
             analyzeMuleFlowXml(content, analysis);
             return;
         }
@@ -309,6 +319,7 @@ public class ProjectArchiveProcessor {
             extractMqEndpoints(content, analysis);
             extractDbOperations(content, analysis);
             extractFileOperations(content, analysis);
+            extractExplicitDataWeaveRequestFields(content, analysis);
             return;
         }
 
@@ -317,6 +328,12 @@ public class ProjectArchiveProcessor {
         // ---------------------------------------------------------
         if (isRamlOrYaml(normalizedName) || normalizedName.contains("swagger") || normalizedName.contains("openapi")) {
             extractApiEndpoints(content, analysis);
+            extractRamlRequestFields(content, analysis);
+            return;
+        }
+
+        if (normalizedName.endsWith(".json")) {
+            extractJsonSchemaRequestFields(content, analysis);
             return;
         }
 
@@ -477,7 +494,7 @@ public class ProjectArchiveProcessor {
                 String listenerAttributes = listenerMatcher.group(1);
                 String configName = attribute(listenerAttributes, "config-ref");
                 String path = attribute(listenerAttributes, "path");
-                String configuredMethod = nullIfBlank(attribute(listenerAttributes, "method"));
+                String configuredMethod = nullIfBlank(attribute(listenerAttributes, "allowedMethods"));
                 String method = configuredMethod == null ? "GET" : configuredMethod;
                 String connection = listenerConfigs.getOrDefault(configName, "");
                 flow.setTrigger(FlowTrigger.builder().type("HTTP").path(path).build());
@@ -496,6 +513,7 @@ public class ProjectArchiveProcessor {
             analysis.getFlowDetails().add(flow);
             extractStructuredVariables(flowBody, flowName, analysis);
             extractStructuredTransformations(flowBody, flowName, analysis);
+            extractExplicitDataWeaveRequestFields(flowBody, analysis);
         }
     }
 
@@ -879,6 +897,113 @@ public class ProjectArchiveProcessor {
         while (ramlMatcher.find()) {
             addUnique(analysis.getApis(), ramlMatcher.group(1).trim());
         }
+    }
+
+    private static void extractExplicitDataWeaveRequestFields(String content, ProjectArtifactAnalysis analysis) {
+        Matcher matcher = Pattern.compile("\\bpayload\\s*\\.\\s*([A-Za-z_][\\w-]*)", Pattern.CASE_INSENSITIVE)
+                .matcher(content);
+        while (matcher.find()) {
+            addUnique(analysis.getExplicitDataWeaveRequestFields(), matcher.group(1));
+        }
+    }
+
+    private static void extractValidationRequestFields(String content, ProjectArtifactAnalysis analysis) {
+        Matcher matcher = Pattern.compile("\\bpayload\\s*\\.\\s*([A-Za-z_][\\w-]*)", Pattern.CASE_INSENSITIVE)
+                .matcher(content);
+        while (matcher.find()) {
+            addUnique(analysis.getContractRequestFields(), matcher.group(1));
+        }
+    }
+
+    private static void extractJsonSchemaRequestFields(String content, ProjectArtifactAnalysis analysis) {
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(content);
+            JsonNode properties = root == null ? null : root.get("properties");
+            if (properties != null && properties.isObject()) {
+                properties.fieldNames().forEachRemaining(field ->
+                        addUnique(analysis.getContractRequestFields(), field));
+            }
+        } catch (IOException ignored) {
+            // Non-schema JSON files are not request contracts.
+        }
+    }
+
+    private static void extractRamlRequestFields(String content, ProjectArtifactAnalysis analysis) {
+        Map<String, List<String>> typeFields = new java.util.LinkedHashMap<>();
+        String currentType = null;
+        int propertiesIndent = -1;
+        int bodyIndent = -1;
+        int bodyPropertiesIndent = -1;
+        String requestType = null;
+
+        for (String line : content.split("\\R")) {
+            if (line.isBlank() || line.trim().startsWith("#")) {
+                continue;
+            }
+            int indent = line.indexOf(line.trim());
+            String trimmed = line.trim();
+
+            Matcher typeMatcher = Pattern.compile("^([A-Za-z][\\w.-]*):\\s*$").matcher(trimmed);
+            if (indent == 2 && typeMatcher.find()) {
+                currentType = typeMatcher.group(1);
+                typeFields.putIfAbsent(currentType, new java.util.ArrayList<>());
+                propertiesIndent = -1;
+            }
+            if (bodyIndent >= 0 && indent > bodyIndent && trimmed.equals("properties:")) {
+                bodyPropertiesIndent = indent;
+                continue;
+            }
+            if (trimmed.equals("properties:")) {
+                propertiesIndent = indent;
+                continue;
+            }
+            if (propertiesIndent >= 0 && indent <= propertiesIndent) {
+                propertiesIndent = -1;
+            } else if (propertiesIndent >= 0 && currentType != null) {
+                Matcher fieldMatcher = Pattern.compile("^([A-Za-z][\\w.-]*)(\\?)?:").matcher(trimmed);
+                if (fieldMatcher.find()) {
+                    addUnique(typeFields.get(currentType), fieldMatcher.group(1));
+                }
+            }
+
+            if (trimmed.equals("body:")) {
+                bodyIndent = indent;
+                bodyPropertiesIndent = -1;
+            } else if (bodyIndent >= 0 && indent > bodyIndent) {
+                if (trimmed.equals("properties:")) {
+                    bodyPropertiesIndent = indent;
+                    continue;
+                }
+                if (bodyPropertiesIndent >= 0 && indent <= bodyPropertiesIndent) {
+                    bodyPropertiesIndent = -1;
+                }
+                if (bodyPropertiesIndent >= 0) {
+                    Matcher inlineFieldMatcher = Pattern.compile("^([A-Za-z][\\w.-]*)(\\?)?:").matcher(trimmed);
+                    if (inlineFieldMatcher.find()) {
+                        addUnique(analysis.getContractRequestFields(), inlineFieldMatcher.group(1));
+                    }
+                }
+                Matcher bodyTypeMatcher = Pattern.compile("^type:\\s*([A-Za-z][\\w.-]*)(?:\\[\\])?$").matcher(trimmed);
+                if (bodyTypeMatcher.find()) {
+                    requestType = bodyTypeMatcher.group(1);
+                }
+            } else if (bodyIndent >= 0 && indent <= bodyIndent) {
+                bodyIndent = -1;
+                bodyPropertiesIndent = -1;
+            }
+        }
+
+        if (requestType != null && typeFields.containsKey(requestType)) {
+            typeFields.get(requestType).forEach(field -> addUnique(analysis.getContractRequestFields(), field));
+        }
+    }
+
+    private static void resolveRequestFields(ProjectArtifactAnalysis analysis) {
+        List<String> fields = analysis.getContractRequestFields().isEmpty()
+                ? analysis.getExplicitDataWeaveRequestFields()
+                : analysis.getContractRequestFields();
+        fields.forEach(field -> addUnique(analysis.getRequestFields(), field));
+        analysis.getApiDetails().forEach(endpoint -> endpoint.setRequestFields(new java.util.ArrayList<>(analysis.getRequestFields())));
     }
 
     /**

@@ -66,6 +66,15 @@ public class ProjectArtifactAnalysis {
     private List<TransformationDetail> transformationDetails = new ArrayList<>();
 
     @Builder.Default
+    private List<String> requestFields = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> contractRequestFields = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> explicitDataWeaveRequestFields = new ArrayList<>();
+
+    @Builder.Default
     private List<String> kafkaTopics = new ArrayList<>();
 
     @Builder.Default

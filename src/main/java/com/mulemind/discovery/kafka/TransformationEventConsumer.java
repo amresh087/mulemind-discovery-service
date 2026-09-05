@@ -69,6 +69,7 @@ public class TransformationEventConsumer {
                     .flowReferences(List.copyOf(analysis.getFlowReferenceDetails()))
                     .variables(List.copyOf(analysis.getVariableDetails()))
                     .transformations(List.copyOf(analysis.getTransformationDetails()))
+                    .requestFields(List.copyOf(analysis.getRequestFields()))
                     .runtimeInfo(analysis.getRuntimeInfo())
                     .typeMetadata(analysis.getTypeMetadata())
                     .integrations(com.mulemind.discovery.dto.IntegrationDetails.builder()

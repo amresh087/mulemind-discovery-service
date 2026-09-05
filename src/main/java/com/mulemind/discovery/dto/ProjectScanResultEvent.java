@@ -48,6 +48,9 @@ public class ProjectScanResultEvent {
     @Builder.Default
     private List<TransformationDetail> transformations = new ArrayList<>();
 
+    @Builder.Default
+    private List<String> requestFields = new ArrayList<>();
+
     private IntegrationDetails integrations;
     private DependencyDetails dependencies;
 

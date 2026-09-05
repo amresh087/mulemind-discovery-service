@@ -19,4 +19,7 @@ public class ApiEndpoint {
     private String host;
     private Integer port;
     private String flow;
+
+    @Builder.Default
+    private java.util.List<String> requestFields = new java.util.ArrayList<>();
 }
